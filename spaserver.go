@@ -7,8 +7,8 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
-
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -35,9 +35,26 @@ var etagHeaders = []string{
 	"If-Unmodified-Since",
 }
 
-// Serve a single-page application from the filesystem. Requests for `index.html` will be redirected to the root path.
-// Requests for the root path or non-existent files will render the `index.html` page. When the index page is rendered,
-// headers are set to prevent caching by upstream servers.
+var securityHeaders = map[string]string{
+	"X-Content-Type-Options":  "nosniff",
+	"X-Frame-Options":         "DENY",
+	"Content-Security-Policy": "default-src 'self'",
+}
+
+// Serve a single-page application from the filesystem.
+//
+// SECURITY NOTES:
+//   - When using os.DirFS: Symlinks are followed and may escape the root directory.
+//     For untrusted filesystems, consider using Go 1.24+ os.Root instead.
+//   - When using embed.FS: Symlinks are not supported (build-time only).
+//   - All paths are cleaned using path.Clean to prevent basic traversal attacks.
+//   - Path validation using filepath.IsLocal prevents directory traversal attempts.
+//
+// BEHAVIOR:
+// - Requests for /index.html redirect to /
+// - Requests for / or non-existent files serve index.html
+// - index.html responses include no-cache and security headers
+// - Other files are cached normally
 func Serve(fsys fs.FS) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Normalize and clean the path
@@ -63,6 +80,13 @@ func Serve(fsys fs.FS) http.Handler {
 		}
 
 		name := strings.TrimPrefix(upath, "/")
+
+		// Validate the path is safe (prevents directory traversal)
+		if !filepath.IsLocal(name) {
+			serveError(w, "400 Bad Request", http.StatusBadRequest)
+			return
+		}
+
 		file, err := fsys.Open(name)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
@@ -102,7 +126,9 @@ func Serve(fsys fs.FS) http.Handler {
 	})
 }
 
-// serveIndex sets headers to prevent caching by upstream servers.
+// serveIndex sends the index.html file with no-cache and security headers.
+// This prevents caching of the SPA entry point, ensuring users always get
+// the latest version and route handling works correctly.
 func serveIndex(fsys fs.FS, w http.ResponseWriter, r *http.Request) {
 	b, err := fs.ReadFile(fsys, indexPage)
 	if err != nil {
@@ -121,6 +147,11 @@ func serveIndex(fsys fs.FS, w http.ResponseWriter, r *http.Request) {
 
 	// Set NoCache headers
 	for k, v := range noCacheHeaders {
+		w.Header().Set(k, v)
+	}
+
+	// Set security headers
+	for k, v := range securityHeaders {
 		w.Header().Set(k, v)
 	}
 
@@ -159,21 +190,24 @@ func serveError(w http.ResponseWriter, text string, code int) {
 	http.Error(w, text, code)
 }
 
+// fileToReadSeeker converts an fs.File to io.ReadSeeker for http.ServeContent.
+// embed.FS and os.DirFS files implement io.ReadSeeker directly.
+// Custom fs.FS implementations may need buffering as a fallback.
 func fileToReadSeeker(file fs.File) (io.ReadSeeker, error) {
 	// Try to assert to io.ReadSeeker
+	// Both embed.FS and os.DirFS files implement this
 	if seeker, ok := file.(io.ReadSeeker); ok {
-		// Can seek directly
-		seeker.Seek(0, io.SeekStart)
+		if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+			return nil, fmt.Errorf("seek failed: %w", err)
+		}
 		return seeker, nil
 	}
 
-	// Otherwise, buffer it
+	// Fallback: buffer it (for non-standard fs.FS implementations)
 	data, err := io.ReadAll(file)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read all: %w", err)
+		return nil, fmt.Errorf("read failed: %w", err)
 	}
 
-	seeker := bytes.NewReader(data)
-
-	return seeker, nil
+	return bytes.NewReader(data), nil
 }
