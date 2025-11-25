@@ -32,12 +32,22 @@ import (
 
 func main() {
     // Serve a SPA from the ./dist directory
+    // Expects index.html to be at ./dist/index.html
     fsys := os.DirFS("dist")
     handler := spaserver.Serve(fsys)
 
     log.Println("Server running on http://localhost:8080")
     log.Fatal(http.ListenAndServe(":8080", handler))
 }
+```
+
+**Important**: The filesystem provided must have `index.html` at its root. For example, if using `os.DirFS("dist")`, your directory structure should be:
+```
+dist/
+├── index.html
+├── css/
+├── js/
+└── ...
 ```
 
 ## Usage Examples
