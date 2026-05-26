@@ -143,6 +143,79 @@ func TestServe(t *testing.T) {
 	}
 }
 
+func TestServeWithCSP(t *testing.T) {
+	tt := []struct {
+		name         string
+		opts         []Option
+		wantCSP      string
+		wantCSPSent  bool
+	}{
+		{
+			name:        "no option uses default CSP",
+			opts:        nil,
+			wantCSP:     "default-src 'self'",
+			wantCSPSent: true,
+		},
+		{
+			name:        "custom CSP overrides default",
+			opts:        []Option{WithCSP("default-src 'self'; img-src 'self' data: https:")},
+			wantCSP:     "default-src 'self'; img-src 'self' data: https:",
+			wantCSPSent: true,
+		},
+		{
+			name:        "empty CSP omits the header",
+			opts:        []Option{WithCSP("")},
+			wantCSPSent: false,
+		},
+		{
+			name:        "last option wins",
+			opts:        []Option{WithCSP("default-src 'none'"), WithCSP("default-src 'self'; img-src *")},
+			wantCSP:     "default-src 'self'; img-src *",
+			wantCSPSent: true,
+		},
+	}
+
+	for _, tc := range tt {
+		t.Run(tc.name, func(t *testing.T) {
+			fsys := os.DirFS("testdata")
+			h := Serve(fsys, tc.opts...)
+
+			r, err := http.NewRequest(http.MethodGet, "http://www.example.com/", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+
+			if w.Result().StatusCode != 200 {
+				t.Fatalf("statusCode expected: 200, got: %d", w.Result().StatusCode)
+			}
+
+			cspValues := w.Result().Header.Values("Content-Security-Policy")
+			if tc.wantCSPSent {
+				if len(cspValues) != 1 {
+					t.Fatalf("expected exactly one Content-Security-Policy header, got %d: %v", len(cspValues), cspValues)
+				}
+				if cspValues[0] != tc.wantCSP {
+					t.Errorf("Content-Security-Policy expected: %q, got: %q", tc.wantCSP, cspValues[0])
+				}
+			} else {
+				if len(cspValues) != 0 {
+					t.Errorf("expected no Content-Security-Policy header, got: %v", cspValues)
+				}
+			}
+
+			// X-Frame-Options and X-Content-Type-Options remain regardless of CSP config.
+			if got := w.Result().Header.Get("X-Frame-Options"); got != "DENY" {
+				t.Errorf("X-Frame-Options expected: DENY, got: %q", got)
+			}
+			if got := w.Result().Header.Get("X-Content-Type-Options"); got != "nosniff" {
+				t.Errorf("X-Content-Type-Options expected: nosniff, got: %q", got)
+			}
+		})
+	}
+}
+
 func BenchmarkServeStatic(b *testing.B) {
 	fsys := os.DirFS("testdata")
 	h := Serve(fsys)

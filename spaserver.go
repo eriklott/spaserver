@@ -36,9 +36,25 @@ var etagHeaders = []string{
 }
 
 var securityHeaders = map[string]string{
-	"X-Content-Type-Options":  "nosniff",
-	"X-Frame-Options":         "DENY",
-	"Content-Security-Policy": "default-src 'self'",
+	"X-Content-Type-Options": "nosniff",
+	"X-Frame-Options":        "DENY",
+}
+
+const defaultCSP = "default-src 'self'"
+
+type config struct {
+	csp string
+}
+
+// Option configures the behavior of Serve.
+type Option func(*config)
+
+// WithCSP overrides the Content-Security-Policy header sent with index.html
+// responses. Pass an empty string to omit the header entirely.
+func WithCSP(policy string) Option {
+	return func(c *config) {
+		c.csp = policy
+	}
 }
 
 // Serve a single-page application from the filesystem.
@@ -55,7 +71,12 @@ var securityHeaders = map[string]string{
 // - Requests for / or non-existent files serve index.html
 // - index.html responses include no-cache and security headers
 // - Other files are cached normally
-func Serve(fsys fs.FS) http.Handler {
+func Serve(fsys fs.FS, opts ...Option) http.Handler {
+	cfg := config{csp: defaultCSP}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Normalize and clean the path
 		upath := r.URL.Path
@@ -75,7 +96,7 @@ func Serve(fsys fs.FS) http.Handler {
 
 		// Serve index page on root path
 		if upath == "/" {
-			serveIndex(fsys, w, r)
+			serveIndex(fsys, cfg, w, r)
 			return
 		}
 
@@ -90,7 +111,7 @@ func Serve(fsys fs.FS) http.Handler {
 		file, err := fsys.Open(name)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
-				serveIndex(fsys, w, r)
+				serveIndex(fsys, cfg, w, r)
 				return
 			}
 			if errors.Is(err, fs.ErrPermission) {
@@ -111,7 +132,7 @@ func Serve(fsys fs.FS) http.Handler {
 
 		// If the path is a directory, display the index html page instead
 		if fstat.IsDir() {
-			serveIndex(fsys, w, r)
+			serveIndex(fsys, cfg, w, r)
 			return
 		}
 
@@ -129,7 +150,7 @@ func Serve(fsys fs.FS) http.Handler {
 // serveIndex sends the index.html file with no-cache and security headers.
 // This prevents caching of the SPA entry point, ensuring users always get
 // the latest version and route handling works correctly.
-func serveIndex(fsys fs.FS, w http.ResponseWriter, r *http.Request) {
+func serveIndex(fsys fs.FS, cfg config, w http.ResponseWriter, r *http.Request) {
 	b, err := fs.ReadFile(fsys, indexPage)
 	if err != nil {
 		serveError(w, "404 Page Not Found", http.StatusNotFound)
@@ -153,6 +174,9 @@ func serveIndex(fsys fs.FS, w http.ResponseWriter, r *http.Request) {
 	// Set security headers
 	for k, v := range securityHeaders {
 		w.Header().Set(k, v)
+	}
+	if cfg.csp != "" {
+		w.Header().Set("Content-Security-Policy", cfg.csp)
 	}
 
 	http.ServeContent(w, r, indexPage, time.Unix(0, 0), seeker)

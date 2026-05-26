@@ -5,7 +5,7 @@ A production-ready Go HTTP handler for serving Single Page Applications (SPAs) f
 ## Features
 
 - **SPA Routing**: Automatically serves `index.html` for non-existent routes (enables client-side routing)
-- **Security Headers**: Adds `X-Content-Type-Options`, `X-Frame-Options`, and `Content-Security-Policy` headers
+- **Security Headers**: Adds `X-Content-Type-Options`, `X-Frame-Options`, and a configurable `Content-Security-Policy` header
 - **Smart Caching**: No-cache headers for `index.html`, normal caching for static assets
 - **Path Traversal Protection**: Built-in validation to prevent directory traversal attacks
 - **Flexible**: Works with `os.DirFS`, `embed.FS`, or any custom `fs.FS` implementation
@@ -149,7 +149,7 @@ The handler implements SPA-friendly routing behavior:
 - `Cache-Control: no-cache, no-store, must-revalidate`
 - `X-Content-Type-Options: nosniff`
 - `X-Frame-Options: DENY`
-- `Content-Security-Policy: default-src 'self'`
+- `Content-Security-Policy: default-src 'self'` (default; override or disable via [`WithCSP`](#configuration))
 
 **For static assets:**
 - Standard HTTP caching (uses `Last-Modified` and `ETag`)
@@ -167,16 +167,37 @@ This package includes several security features:
 
 - When using `os.DirFS`, symlinks are followed and may escape the root directory. For untrusted filesystems, consider using Go 1.24+ `os.Root` instead.
 - When using `embed.FS`, symlinks are not supported (build-time only).
-- The default CSP (`default-src 'self'`) may be too restrictive for some applications. You can override headers after they're set if needed.
+- The default CSP (`default-src 'self'`) is intentionally strict and will block external images, fonts, scripts, and data-URI resources that most SPA bundlers emit. Use `WithCSP` to supply a policy that matches your app — see [Configuration](#configuration).
+
+## Configuration
+
+The default CSP only allows resources from the same origin. Real SPAs typically need data URIs (for bundler-inlined SVGs) and one or more external hosts (for CDN-hosted images, fonts, or analytics). Override the policy with `WithCSP`:
+
+```go
+handler := spaserver.Serve(fsys,
+    spaserver.WithCSP("default-src 'self'; "+
+        "img-src 'self' data: https://cdn.example.com; "+
+        "style-src 'self' 'unsafe-inline'"),
+)
+```
+
+To omit the `Content-Security-Policy` header entirely (e.g. if you set it via upstream middleware or a reverse proxy):
+
+```go
+handler := spaserver.Serve(fsys, spaserver.WithCSP(""))
+```
+
+`X-Content-Type-Options: nosniff` and `X-Frame-Options: DENY` are always sent and are not configurable.
 
 ## API
 
-### `func Serve(fsys fs.FS) http.Handler`
+### `func Serve(fsys fs.FS, opts ...Option) http.Handler`
 
 Creates an HTTP handler that serves a Single Page Application from the provided filesystem.
 
 **Parameters:**
 - `fsys fs.FS`: Any filesystem implementing `fs.FS` (e.g., `os.DirFS`, `embed.FS`)
+- `opts ...Option`: Zero or more options (see below)
 
 **Returns:**
 - `http.Handler`: An HTTP handler that can be used with `http.Handle()` or `http.ListenAndServe()`
@@ -187,6 +208,10 @@ Creates an HTTP handler that serves a Single Page Application from the provided 
 - `index.html` is served with no-cache and security headers
 - Other files are cached normally
 - Directory listings serve `index.html` instead
+
+### `func WithCSP(policy string) Option`
+
+Overrides the `Content-Security-Policy` header sent with `index.html` responses. Pass an empty string to omit the header entirely. Defaults to `default-src 'self'`.
 
 ## License
 

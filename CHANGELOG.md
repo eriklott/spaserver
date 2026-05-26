@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `WithCSP(policy string)` option to override the `Content-Security-Policy` header on `index.html` responses. Pass an empty string to omit the header entirely.
+- `Serve` now accepts variadic `Option` arguments. Existing `Serve(fsys)` callsites are unchanged and continue to receive the default CSP (`default-src 'self'`).
+
 ## [v0.1.0] - 2025-11-24
 
 ### Added
